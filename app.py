@@ -1,4 +1,5 @@
 import io
+import urllib3
 import requests
 import numpy as np
 import pandas as pd
@@ -10,6 +11,9 @@ from urllib3.util.retry import Retry
 from astropy.io import fits
 from astropy.io.votable import parse_single_table
 from astropy.visualization import ImageNormalize, AsinhStretch
+
+# SSL चेतावणी लपवण्यासाठी
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
 # MECH ORBIT - SPHEREx SKY EXPLORER
@@ -34,18 +38,19 @@ if "errors" not in st.session_state:
     st.session_state.errors = []
 
 # ==========================================
-# HTTP SESSION WITH RETRIES
+# HTTP SESSION WITH RETRIES & SSL FIX
 # ==========================================
 
 def make_session():
     session = requests.Session()
+    session.verify = False  # Caltech SSL Certificate एरर टाळण्यासाठी
 
     retry = Retry(
         total=3,
         connect=3,
         read=3,
         backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
+        status_forcelist=,
         allowed_methods=["GET"],
         raise_on_status=False
     )
@@ -129,7 +134,7 @@ def load_fits(url):
                 continue
 
             while data.ndim > 2:
-                data = data[data.shape[0] // 2]
+                data = data[data.shape // 2]
 
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), hdu.name
@@ -178,7 +183,7 @@ def show_image(url, heading):
 
         st.caption(
             f"Extension: {extension} | "
-            f"Size: {image.shape[1]} × {image.shape[0]} pixels"
+            f"Size: {image.shape} × {image.shape} pixels"
         )
 
         st.link_button(
@@ -304,7 +309,6 @@ if not results_df.empty:
         mime="text/csv"
     )
 
-    # FITS Image Comparison
     if "access_url" in results_df.columns:
         valid_urls = results_df["access_url"].dropna().tolist()
         if valid_urls:
