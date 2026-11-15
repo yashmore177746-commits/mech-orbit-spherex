@@ -1,3 +1,5 @@
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 import io
 import requests
 import pandas as pd
