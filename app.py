@@ -95,7 +95,6 @@ def search_archive(collection, ra, dec, radius):
     if lower_preview.startswith(b"<html") or b"proxy error" in lower_preview:
         raise ValueError("NASA archive returned an HTML/proxy error.")
 
-    # जर डेटा XML/VOTable असेल तर VOTable ने वाचा, अन्यथा CSV ने वाचा
     if raw_bytes.startswith(b"<?xml") or b"<votable" in lower_preview:
         table = parse_single_table(io.BytesIO(raw_bytes)).to_table()
         df = table.to_pandas()
@@ -348,7 +347,6 @@ else:
 # ==========================================
 # ABOUT SECTION
 # ==========================================
+
 st.divider()
 st.subheader("🚀 About MECH ORBIT")
-st.write("MECH ORBIT is a student astronomy project designed to explore public SPHEREx infrared observations.")
-st.caption("Data Source: NASA/IPAC Infrared Science Archive (IRSA) | Team: MECH ORBIT — Student Project")
