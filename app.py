@@ -43,15 +43,15 @@ if "errors" not in st.session_state:
 
 def make_session():
     session = requests.Session()
-    session.verify = False  # Caltech SSL Certificate एरर टाळण्यासाठी
+    session.verify = False
 
     retry = Retry(
         total=3,
         connect=3,
         read=3,
         backoff_factor=2,
-        status_forcelist=,
-        allowed_methods=["GET"],
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
         raise_on_status=False
     )
 
@@ -96,7 +96,7 @@ def search_archive(collection, ra, dec, radius):
     table = parse_single_table(io.BytesIO(response.content)).to_table()
     df = table.to_pandas()
 
-    for col in df.select_dtypes([object]).columns:
+    for col in df.select_dtypes(include=("object",)).columns:
         df[col] = df[col].apply(
             lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
         )
@@ -134,7 +134,8 @@ def load_fits(url):
                 continue
 
             while data.ndim > 2:
-                data = data[data.shape // 2]
+                mid_idx = data.shape[0] // 2
+                data = data[mid_idx]
 
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), hdu.name
@@ -153,7 +154,7 @@ def show_image(url, heading):
             image, extension = load_fits(url)
 
         finite = image[np.isfinite(image)]
-        low, high = np.percentile(finite, [1, 99.5])
+        low, high = np.percentile(finite, (1, 99.5))
 
         if low == high:
             low = float(finite.min())
@@ -181,9 +182,10 @@ def show_image(url, heading):
         st.pyplot(fig, clear_figure=True)
         plt.close(fig)
 
+        height, width = image.shape
         st.caption(
             f"Extension: {extension} | "
-            f"Size: {image.shape} × {image.shape} pixels"
+            f"Size: {width} × {height} pixels"
         )
 
         st.link_button(
@@ -231,13 +233,13 @@ with st.sidebar:
 
     collections = st.multiselect(
         "SPHEREx Collections",
-        options=[
+        options=(
             "spherex_dr1",
             "spherex_qr3",
             "spherex_dr1_deep",
             "spherex_qr3_deep"
-        ],
-        default=["spherex_dr1", "spherex_qr3"]
+        ),
+        default=("spherex_dr1", "spherex_qr3")
     )
 
     search_btn = st.button("🚀 Search NASA Archive", type="primary", use_container_width=True)
@@ -294,10 +296,8 @@ results_df = st.session_state.results
 if not results_df.empty:
     st.success(f"Found {len(results_df)} observations!")
 
-    display_cols = [
-        c for c in ["collection", "obs_id", "s_ra", "s_dec", "em_min", "em_max", "t_exptime", "access_url"]
-        if c in results_df.columns
-    ]
+    possible_cols = ("collection", "obs_id", "s_ra", "s_dec", "em_min", "em_max", "t_exptime", "access_url")
+    display_cols = [c for c in possible_cols if c in results_df.columns]
 
     st.dataframe(results_df[display_cols] if display_cols else results_df, use_container_width=True)
 
@@ -317,12 +317,21 @@ if not results_df.empty:
 
             col1, col2 = st.columns(2)
             with col1:
-                idx1 = st.selectbox("Select Observation 1", range(len(valid_urls)), format_func=lambda i: f"Obs #{i+1} ({results_df.iloc[i].get('collection', '')})")
+                idx1 = st.selectbox(
+                    "Select Observation 1",
+                    range(len(valid_urls)),
+                    format_func=lambda i: f"Obs #{i+1} ({results_df.iloc[i].get('collection', '')})"
+                )
                 show_image(valid_urls[idx1], f"Observation #{idx1+1}")
 
             if len(valid_urls) > 1:
                 with col2:
-                    idx2 = st.selectbox("Select Observation 2", range(len(valid_urls)), index=1, format_func=lambda i: f"Obs #{i+1} ({results_df.iloc[i].get('collection', '')})")
+                    idx2 = st.selectbox(
+                        "Select Observation 2",
+                        range(len(valid_urls)),
+                        index=1,
+                        format_func=lambda i: f"Obs #{i+1} ({results_df.iloc[i].get('collection', '')})"
+                    )
                     show_image(valid_urls[idx2], f"Observation #{idx2+1}")
 else:
     if search_btn and not st.session_state.errors:
