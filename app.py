@@ -1,21 +1,18 @@
-from astropy.coordinates import SkyCoord
-import astropy.units as u
+
 import io
 import requests
+import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 from astropy.io import fits
-from astropy.visualization import (
-    ImageNormalize,
-    PercentileInterval,
-    AsinhStretch
-)
+from astroquery.ipac.irsa import Irsa
 
-# ---------------- CONFIGURATION ----------------
 
-SIA_URL = "https://irsa.ipac.caltech.edu/SIA"
+# ---------------- PAGE SETTINGS ----------------
 
 st.set_page_config(
     page_title="MECH ORBIT | SPHEREx Sky Explorer",
@@ -24,13 +21,10 @@ st.set_page_config(
 )
 
 st.title("🌌 MECH ORBIT — SPHEREx Sky Explorer")
-
-st.markdown("""
-Explore public SPHEREx infrared observations
-using NASA/IPAC-IRSA archive data.
-""")
-
-st.divider()
+st.caption(
+    "Explore real public SPHEREx infrared observations "
+    "from NASA/IPAC-IRSA."
+)
 
 # ---------------- SIDEBAR ----------------
 
@@ -55,8 +49,7 @@ with st.sidebar:
         "Search Radius (degrees)",
         min_value=0.001,
         max_value=2.0,
-        value=0.05,
-        step=0.01
+        value=0.05
     )
 
     collections = st.multiselect(
@@ -71,46 +64,30 @@ with st.sidebar:
         use_container_width=True
     )
 
-# ---------------- NASA ARCHIVE SEARCH ----------------
 
+# ---------------- ARCHIVE SEARCH ----------------
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800, show_spinner=False)
 def query_archive(collection, ra_value, dec_value, radius_value):
 
-    coord = SkyCoord(
-        ra_value,
-        dec_value,
-        unit="deg"
+    coordinate = SkyCoord(
+        ra=ra_value * u.deg,
+        dec=dec_value * u.deg,
+        frame="icrs"
     )
 
-    results = Irsa.query_sia(
-        pos=(coord, radius_value * u.deg),
-        collection=collection
+    table = Irsa.query_sia(
+        pos=(coordinate, radius_value * u.deg),
+        collection=collection,
+        maxrec=200
     )
 
-    return results.to_pandas()
-
-
-
-# ---------------- FITS URL ----------------
-
-def get_access_url(row):
-
-    for column in ["access_url", "cloud_access"]:
-
-        if column in row.index and pd.notna(row[column]):
-
-            url = str(row[column]).strip()
-
-            if url.startswith("http"):
-                return url
-
-    return None
+    return table.to_pandas()
 
 
 # ---------------- FITS IMAGE READER ----------------
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=1800, show_spinner=False)
 def read_fits_image(url):
 
     response = requests.get(url, timeout=120)
@@ -125,21 +102,26 @@ def read_fits_image(url):
 
             data = getattr(hdu, "data", None)
 
-            if data is not None and getattr(data, "ndim", 0) >= 2:
+            if data is None:
+                continue
 
-                while data.ndim > 2:
-                    data = data[0]
+            data = np.asarray(data)
 
-                if data.ndim == 2:
-                    return data.astype("float32")
+            data = np.squeeze(data)
 
-    raise ValueError("No 2D image found in FITS file.")
+            if data.ndim == 2:
+
+                return data.astype("float32")
+
+    raise ValueError(
+        "No 2D image found in this FITS file."
+    )
 
 
 # ---------------- SESSION STATE ----------------
 
-if "archive_results" not in st.session_state:
-    st.session_state.archive_results = pd.DataFrame()
+if "results" not in st.session_state:
+    st.session_state.results = pd.DataFrame()
 
 
 # ---------------- SEARCH BUTTON ----------------
@@ -152,50 +134,56 @@ if search:
 
     else:
 
-        frames = []
+        all_results = []
 
-        with st.spinner("Connecting to NASA/IPAC-IRSA Archive..."):
+        with st.spinner(
+            "Connecting to NASA/IPAC-IRSA archive..."
+        ):
 
             for collection in collections:
 
                 try:
 
-                    frame = query_archive(
+                    data = query_archive(
                         collection,
                         ra,
                         dec,
                         radius
                     )
 
-                    if not frame.empty:
+                    if not data.empty:
 
-                        frame["selected_collection"] = collection
-                        frames.append(frame)
+                        data["selected_collection"] = collection
+
+                        all_results.append(data)
 
                 except Exception as error:
 
-                    st.error(f"{collection}: {error}")
+                    st.error(
+                        f"{collection}: {error}"
+                    )
 
-        if frames:
+        if all_results:
 
-            st.session_state.archive_results = pd.concat(
-                frames,
+            st.session_state.results = pd.concat(
+                all_results,
                 ignore_index=True
             )
 
         else:
 
-            st.session_state.archive_results = pd.DataFrame()
+            st.session_state.results = pd.DataFrame()
 
 
 # ---------------- DISPLAY RESULTS ----------------
 
-results = st.session_state.archive_results
+results = st.session_state.results
 
 if results.empty:
 
     st.info(
-        "Enter sky coordinates and click Search SPHEREx Images."
+        "Enter sky coordinates and click "
+        "Search SPHEREx Images."
     )
 
 else:
@@ -204,21 +192,23 @@ else:
         f"NASA Archive returned {len(results)} observations!"
     )
 
-    st.subheader("📡 Archive Observations")
+    st.subheader("🛰️ Archive Observations")
+
+    preferred_columns = [
+        "selected_collection",
+        "obs_id",
+        "s_ra",
+        "s_dec",
+        "t_min",
+        "t_max",
+        "em_min",
+        "em_max",
+        "access_url"
+    ]
 
     display_columns = [
-        column for column in [
-            "selected_collection",
-            "obs_id",
-            "s_ra",
-            "s_dec",
-            "t_min",
-            "t_max",
-            "em_min",
-            "em_max",
-            "access_url"
-        ]
-        if column in results.columns
+        col for col in preferred_columns
+        if col in results.columns
     ]
 
     st.dataframe(
@@ -227,135 +217,122 @@ else:
         hide_index=True
     )
 
-    # ---------------- IMAGE PREVIEW ----------------
+    # Find FITS URLs
 
-    results = results.copy()
-
-    results["preview_url"] = results.apply(
-        get_access_url,
-        axis=1
+    url_column = next(
+        (
+            col for col in ["access_url", "cloud_access"]
+            if col in results.columns
+        ),
+        None
     )
 
-    usable = results[
-        results["preview_url"].notna()
-    ].reset_index(drop=True)
-
-    if usable.empty:
+    if url_column is None:
 
         st.warning(
-            "No direct FITS access URL found. "
-            "Please check archive metadata."
+            "No FITS URL column was returned by the archive."
         )
 
     else:
 
-        st.subheader("🌌 Compare Infrared Observations")
+        usable = results.copy()
 
-        labels = [
-            f"{i+1}. {row.get('selected_collection', 'SPHEREx')} "
-            f"— {row.get('obs_id', 'Observation')}"
-            for i, row in usable.iterrows()
-        ]
+        usable[url_column] = usable[url_column].astype(str)
 
-        col1, col2 = st.columns(2)
+        usable = usable[
+            usable[url_column].str.startswith("http")
+        ].reset_index(drop=True)
 
-        with col1:
+        if usable.empty:
 
-            index_a = st.selectbox(
-                "Observation A",
-                range(len(usable)),
-                format_func=lambda i: labels[i],
-                key="obs_a"
+            st.warning(
+                "No downloadable FITS URLs found."
             )
 
-        with col2:
+        else:
 
-            index_b = st.selectbox(
-                "Observation B",
+            st.subheader("🌌 Compare SPHEREx Images")
+
+            labels = [
+                f"{i + 1}. {row.get('selected_collection', 'SPHEREx')} "
+                f"| {row.get('obs_id', 'Observation')}"
+                for i, row in usable.iterrows()
+            ]
+
+            selected = st.selectbox(
+                "Choose an observation",
                 range(len(usable)),
-                index=min(1, len(usable)-1),
-                format_func=lambda i: labels[i],
-                key="obs_b"
+                format_func=lambda i: labels[i]
             )
 
-        # ---------------- IMAGE DISPLAY ----------------
+            image_url = usable.iloc[selected][url_column]
 
-        for column, index, heading in [
-            (col1, index_a, "Observation A"),
-            (col2, index_b, "Observation B")
-        ]:
+            st.write(labels[selected])
 
-            with column:
+            st.link_button(
+                "📥 Open Original FITS File",
+                image_url
+            )
 
-                st.markdown(f"**{heading}**")
+            try:
 
-                st.caption(labels[index])
+                with st.spinner("Loading astronomical image..."):
 
-                try:
+                    image_data = read_fits_image(image_url)
 
-                    with st.spinner("Loading FITS image..."):
+                finite = image_data[np.isfinite(image_data)]
 
-                        image = read_fits_image(
-                            usable.iloc[index]["preview_url"]
-                        )
+                if finite.size == 0:
+                    raise ValueError("Image contains no valid pixels.")
 
-                    fig, ax = plt.subplots(figsize=(6, 5))
+                vmin, vmax = np.percentile(
+                    finite,
+                    [1, 99]
+                )
 
-                    norm = ImageNormalize(
-                        image,
-                        interval=PercentileInterval(99.5),
-                        stretch=AsinhStretch()
-                    )
+                fig, ax = plt.subplots(figsize=(9, 7))
 
-                    ax.imshow(
-                        image,
-                        origin="lower",
-                        cmap="magma",
-                        norm=norm
-                    )
+                ax.imshow(
+                    image_data,
+                    origin="lower",
+                    cmap="magma",
+                    vmin=vmin,
+                    vmax=vmax
+                )
 
-                    ax.set_xlabel("Pixel X")
-                    ax.set_ylabel("Pixel Y")
+                ax.set_title("SPHEREx Infrared Observation")
+                ax.set_xlabel("Pixel X")
+                ax.set_ylabel("Pixel Y")
 
-                    ax.set_title(heading)
+                st.pyplot(fig)
+                plt.close(fig)
 
-                    st.pyplot(fig, clear_figure=True)
+                st.success("FITS image loaded successfully!")
 
-                    plt.close(fig)
+            except Exception as error:
 
-                except Exception as error:
-
-                    st.error(
-                        f"Could not display FITS image: {error}"
-                    )
-
-                st.link_button(
-                    "Open Original FITS File",
-                    str(usable.iloc[index]["preview_url"])
+                st.error(
+                    f"Image preview unavailable: {error}"
                 )
 
 
-# ---------------- ABOUT PROJECT ----------------
+# ---------------- ABOUT SECTION ----------------
 
 st.divider()
 
-st.subheader("🚀 About MECH ORBIT")
+st.header("🚀 About MECH ORBIT")
 
 st.write("""
-MECH ORBIT is a student project designed to explore
-public SPHEREx infrared observations.
+MECH ORBIT is a student astronomy project designed
+to explore public SPHEREx infrared observations.
 
 The application connects to the NASA/IPAC-IRSA archive,
-searches astronomical observations using sky coordinates,
-and displays available FITS images.
+searches observations using astronomical sky coordinates,
+and displays available FITS image data.
 
-SPHEREx is NASA's all-sky infrared survey mission.
+SPHEREx studies the universe in near-infrared light.
 """)
 
-st.info(
-    "Data source: NASA/IPAC-IRSA Public Archive"
-)
-
 st.caption(
-    "Developed by Team MECH ORBIT | Student Space Research Project"
+    "Student Prototype | Team MECH ORBIT"
 )
