@@ -1,8 +1,6 @@
-streamlit
-requests
-numpy
-pandas
-matplotlib
-astropy
-urllib3
+streamlit>=1.38
+requests>=2.31
+pandas>=2.0
+astropy>=6.0
+matplotlib>=3.8
 
