@@ -1,3 +1,6 @@
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+from astroquery.ipac.irsa import Irsa
 import io
 import requests
 import pandas as pd
@@ -71,24 +74,23 @@ with st.sidebar:
 
 # ---------------- NASA ARCHIVE SEARCH ----------------
 
+
 @st.cache_data(ttl=3600)
 def query_archive(collection, ra_value, dec_value, radius_value):
 
-    params = {
-        "COLLECTION": collection,
-        "POS": f"circle {ra_value} {dec_value} {radius_value}",
-        "RESPONSEFORMAT": "CSV"
-    }
-
-    response = requests.get(
-        SIA_URL,
-        params=params,
-        timeout=90
+    coord = SkyCoord(
+        ra_value,
+        dec_value,
+        unit="deg"
     )
 
-    response.raise_for_status()
+    results = Irsa.query_sia(
+        pos=(coord, radius_value * u.deg),
+        collection=collection
+    )
 
-    return pd.read_csv(io.BytesIO(response.content))
+    return results.to_pandas()
+
 
 
 # ---------------- FITS URL ----------------
