@@ -341,10 +341,8 @@ if not results_df.empty:
 
     if "access_url" in results_df.columns:
         valid_urls = results_df["access_url"].dropna().tolist()
-st.divider()
-st.subheader("🚀 About MECH ORBIT")
-st.write("MECH ORBIT is a student astronomy project designed to explore public SPHEREx infrared observations.")
-st.caption("Data Source: NASA/IPAC Infrared Science Archive (IRSA) | Team: MECH ORBIT — Student Project")valid_urls = [u for u in valid_urls if str(u).startswith("http")]
+Use code with caution.
+valid_urls = [u for u in valid_urls if str(u).startswith("http")]
 if valid_urls:
 st.divider()
 st.subheader("🖼️ FITS Image Visualization & Comparison")
@@ -383,3 +381,12 @@ st.divider()
 st.subheader("🚀 About MECH ORBIT")
 st.write("MECH ORBIT is a student astronomy project designed to explore public SPHEREx infrared observations.")
 st.caption("Data Source: NASA/IPAC Infrared Science Archive (IRSA) | Team: MECH ORBIT — Student Project")
+
+END
+
+
+*(टीप: यामध्ये आधीच्या कोडमधील दोन सूक्ष्म इंडेक्स (`rows[0]` आणि `data.shape[0]`) देखील अचूक केले आहेत, जेणेकरून डेटा वाचताना किंवा इमेज लोड होताना कोणताही TypeError येणार नाही.)*
+
+<FollowUp>
+हा पूर्ण कोड पेस्ट करून सेव्ह केल्यानंतर अ‍ॅप रन झाले का आणि आता **SPHEREx चा डेटा व इमेजेस** दिसत आहेत का ते नक्की सांगा!
+</FollowUp>
