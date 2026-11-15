@@ -65,7 +65,7 @@ def make_session():
     return session
 
 # ==========================================
-# ARCHIVE SEARCH (VOTable Support)
+# ARCHIVE SEARCH (SMART CSV + VOTABLE PARSER)
 # ==========================================
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -74,7 +74,8 @@ def search_archive(collection, ra, dec, radius):
 
     params = {
         "COLLECTION": collection,
-        "POS": f"circle {ra} {dec} {radius}"
+        "POS": f"circle {ra} {dec} {radius}",
+        "RESPONSEFORMAT": "CSV"
     }
 
     response = session.get(
@@ -88,13 +89,18 @@ def search_archive(collection, ra, dec, radius):
     if not response.content:
         raise ValueError("Empty response from NASA archive.")
 
-    content = response.content.lstrip().lower()
+    raw_bytes = response.content.lstrip()
+    lower_preview = raw_bytes[:3000].lower()
 
-    if content.startswith(b"<html") or b"proxy error" in content[:3000]:
+    if lower_preview.startswith(b"<html") or b"proxy error" in lower_preview:
         raise ValueError("NASA archive returned an HTML/proxy error.")
 
-    table = parse_single_table(io.BytesIO(response.content)).to_table()
-    df = table.to_pandas()
+    # जर डेटा XML/VOTable असेल तर VOTable ने वाचा, अन्यथा CSV ने वाचा
+    if raw_bytes.startswith(b"<?xml") or b"<votable" in lower_preview:
+        table = parse_single_table(io.BytesIO(raw_bytes)).to_table()
+        df = table.to_pandas()
+    else:
+        df = pd.read_csv(io.BytesIO(raw_bytes))
 
     for col in df.select_dtypes(include=("object",)).columns:
         df[col] = df[col].apply(
@@ -134,7 +140,7 @@ def load_fits(url):
                 continue
 
             while data.ndim > 2:
-                mid_idx = data.shape[0] // 2
+                mid_idx = data.shape // 2
                 data = data[mid_idx]
 
             if data.ndim == 2 and np.isfinite(data).any():
@@ -342,7 +348,6 @@ else:
 # ==========================================
 # ABOUT SECTION
 # ==========================================
-
 st.divider()
 st.subheader("🚀 About MECH ORBIT")
 st.write("MECH ORBIT is a student astronomy project designed to explore public SPHEREx infrared observations.")
