@@ -1,6 +1,3 @@
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-from astroquery.ipac.irsa import Irsa
 import io
 import requests
 import pandas as pd
