@@ -58,12 +58,12 @@ with st.sidebar:
         step=0.01,
         format="%.3f"
     )
-
-    collections = st.multiselect(
-        "SPHEREx Collections",
-        ["spherex_dr1", "spherex_qr3"],
-        default=["spherex_dr1", "spherex_qr3"]
-    )
+collections = st.multiselect(
+    "SPHEREx Collections",
+    ["spherex_qr2", "spherex_qr2_deep"],
+    default=["spherex_qr2"]
+)
+    
 
     search = st.button(
         "🚀 Search SPHEREx Images",
@@ -73,15 +73,18 @@ with st.sidebar:
 
 # ---------------------------------
 # ARCHIVE QUERY
-# ---------------------------------
+# --------------------------------
 
 @st.cache_data(ttl=1800)
 def query_archive(collection, ra_value, dec_value, radius_value):
 
+    from astropy.table import Table
+
     params = {
         "COLLECTION": collection,
-        "POS": f"CIRCLE {ra_value} {dec_value} {radius_value}",
-        "RESPONSEFORMAT": "CSV"
+        "POS": f"circle {ra_value} {dec_value} {radius_value}",
+        "FORMAT": "image/fits",
+        "RESPONSEFORMAT": "VOTABLE"
     }
 
     response = requests.get(
@@ -92,29 +95,16 @@ def query_archive(collection, ra_value, dec_value, radius_value):
 
     response.raise_for_status()
 
-    content = response.content
+    table = Table.read(
+        io.BytesIO(response.content),
+        format="votable"
+    )
 
-    # Read archive response safely
-    if content.lstrip().startswith(b"<?xml") or b":VOTABLE" in content[:1000]:
-        from astropy.table import Table
-
-        table = Table.read(
-            io.BytesIO(content),
-            format="votable"
-        )
-
-        df = table.to_pandas()
-
-    else:
-        df = pd.read_csv(
-            io.BytesIO(content),
-            comment="#",
-            skip_blank_lines=True
-        )
+    df = table.to_pandas()
 
     df.columns = [
-        str(column).strip().lower()
-        for column in df.columns
+        str(c).strip().lower()
+        for c in df.columns
     ]
 
     return df
