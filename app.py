@@ -11,117 +11,123 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. Helper Function: Clean DataFrame for Proper CSV Export
-def clean_dataframe_for_csv(df):
-    """Converts bytes, objects, and arrays into clean readable strings/values."""
+# 2. Clean DataFrame Function (Fixes Garbled/Byte Code in CSV)
+def clean_dataframe(df):
     clean_df = df.copy()
     for col in clean_df.columns:
-        # Decode byte strings (e.g., b'spherex_dr1' -> 'spherex_dr1')
-        if clean_df[col].apply(lambda x: isinstance(x, bytes)).any():
-            clean_df[col] = clean_df[col].apply(
-                lambda x: x.decode('utf-8', errors='ignore') if isinstance(x, bytes) else x
-            )
-        # Convert lists/arrays to comma-separated readable text
-        elif clean_df[col].apply(lambda x: isinstance(x, (list, tuple))).any():
-            clean_df[col] = clean_df[col].apply(
-                lambda x: ", ".join(map(str, x)) if isinstance(x, (list, tuple)) else str(x)
-            )
+        clean_df[col] = clean_df[col].apply(
+            lambda x: x.decode('utf-8', errors='ignore') if isinstance(x, bytes) else x
+        )
+        # Remove extra byte-string wrappers if converted to string earlier (e.g., "b'value'")
+        if clean_df[col].dtype == object:
+            clean_df[col] = clean_df[col].astype(str).str.replace(r"^b'(.*)'$", r"\1", regex=True)
+            clean_df[col] = clean_df[col].replace({"nan": "", "None": ""})
     return clean_df
 
-# 3. Helper Function: Query NASA/IPAC IRSA TAP Service with Retries
+# 3. Fetch Real SPHEREx Data from NASA/IPAC IRSA ObsCore Table
 @st.cache_data(ttl=3600)
-def fetch_irsa_data(ra, dec, radius_deg, collections):
+def query_nasa_irsa(ra, dec, radius_deg, collections):
     tap_url = "https://caltech.edu"
-    results_list = []
+    all_frames = []
     
     for col in collections:
-        # ADQL Query for spatial search
-        query = f"""
-        SELECT TOP 5000 *
-        FROM {col}
-        WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra}, {dec}, {radius_deg})) = 1
+        # NASA IRSA stores SPHEREx records inside ivoa.obscore under obs_collection
+        adql = f"""
+        SELECT TOP 5500
+            obs_collection AS selected_collection,
+            obs_id,
+            s_ra AS ra,
+            s_dec AS dec,
+            t_min AS obs_start_mjd,
+            t_max AS obs_end_mjd,
+            em_min AS wavelength_min,
+            em_max AS wavelength_max,
+            dataproduct_type,
+            access_url,
+            access_format
+        FROM ivoa.obscore
+        WHERE obs_collection = '{col}'
+          AND CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', {ra}, {dec}, {radius_deg})) = 1
         """
         params = {
-            "QUERY": query,
+            "QUERY": adql,
             "FORMAT": "csv"
         }
         
         for attempt in range(3):
             try:
-                response = requests.get(tap_url, params=params, timeout=25)
-                if response.status_code == 200 and not response.text.strip().startswith("<"):
-                    df_part = pd.read_csv(io.StringIO(response.text))
-                    if not df_part.empty:
-                        df_part.insert(0, "selected_collection", col)
-                        results_list.append(df_part)
+                resp = requests.get(tap_url, params=params, timeout=30)
+                if resp.status_code == 200 and not resp.text.strip().startswith("<"):
+                    df_temp = pd.read_csv(io.StringIO(resp.text))
+                    if not df_temp.empty:
+                        all_frames.append(df_temp)
                     break
             except Exception:
                 time.sleep(1)
                 
-    if results_list:
-        combined_df = pd.concat(results_list, ignore_index=True)
-        return clean_dataframe_for_csv(combined_df)
+    if all_frames:
+        final_df = pd.concat(all_frames, ignore_index=True)
+        return clean_dataframe(final_df)
     return pd.DataFrame()
 
-# 4. Sidebar Controls
+# 4. Sidebar Controls (Default set to North Ecliptic Pole where SPHEREx data is guaranteed)
 st.sidebar.header("🔭 Explore the Sky")
-ra = st.sidebar.number_input("Right Ascension (RA in degrees)", min_value=0.0, max_value=360.0, value=180.0, step=0.1)
-dec = st.sidebar.number_input("Declination (Dec in degrees)", min_value=-90.0, max_value=90.0, value=0.0, step=0.1)
-radius = st.sidebar.number_input("Search Radius (degrees)", min_value=0.01, max_value=10.0, value=1.0, step=0.1)
+ra = st.sidebar.number_input("Right Ascension (RA in degrees)", min_value=0.0, max_value=360.0, value=270.0, step=0.5)
+dec = st.sidebar.number_input("Declination (Dec in degrees)", min_value=-90.0, max_value=90.0, value=66.56, step=0.5)
+radius = st.sidebar.number_input("Search Radius (degrees)", min_value=0.1, max_value=15.0, value=2.0, step=0.5)
 
-selected_collections = st.sidebar.multiselect(
+collections = st.sidebar.multiselect(
     "Select SPHEREx Collections",
     options=["spherex_dr1", "spherex_qr3"],
     default=["spherex_dr1", "spherex_qr3"]
 )
 
-search_btn = st.sidebar.button("🚀 Search NASA Archive", type="primary")
+st.sidebar.button("🔄 Refresh Search", type="primary")
 
-# 5. Main Header
+# 5. Main UI Header
 st.title("🌌 MECH ORBIT")
 st.subheader("SPHEREx Sky Explorer")
 st.write("Explore real infrared observations from NASA/IPAC Infrared Science Archive.")
 
-# 6. Execution & Display
-if selected_collections:
-    for col in selected_collections:
-        st.text(f"Searching: {col}")
+# 6. Execute Search & Render Results
+if collections:
+    for c in collections:
+        st.text(f"Searching: {c}")
         
-    with st.spinner("Fetching data from NASA/IPAC IRSA..."):
-        df_results = fetch_irsa_data(ra, dec, radius, selected_collections)
+    with st.spinner("Connecting to NASA/IPAC IRSA Archive..."):
+        df_obs = query_nasa_irsa(ra, dec, radius, collections)
         
-    if not df_results.empty:
-        st.success(f"NASA archive returned {len(df_results)} observations.")
+    if not df_obs.empty:
+        st.success(f"NASA archive returned {len(df_obs)} observations.")
         
         st.markdown("### 🪐 Archive Observations")
-        st.dataframe(df_results, use_container_width=True)
+        st.dataframe(df_obs, use_container_width=True)
         
-        # Clean CSV Generation (Fixes code/garbled output issue)
-        csv_bytes = df_results.to_csv(index=False).encode("utf-8-sig")
-        
+        # Clean CSV Export
+        csv_data = df_obs.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             label="📥 Download Archive CSV",
-            data=csv_bytes,
-            file_name=f"mech_orbit_spherex_ra{ra}_dec{dec}.csv",
+            data=csv_data,
+            file_name=f"MECH_ORBIT_SPHEREx_RA{ra}_Dec{dec}.csv",
             mime="text/csv"
         )
         
-        # FITS Image Explorer Section
+        # FITS Image Explorer
         st.markdown("---")
         st.markdown("### 🌠 SPHEREx Image Explorer")
-        url_cols = [c for c in df_results.columns if "url" in c.lower() or "access" in c.lower()]
+        valid_urls = df_obs[df_obs["access_url"].str.startswith("http", na=False)]
         
-        if url_cols:
-            st.info(f"FITS URLs found in column: `{url_cols[0]}`")
-            st.write(df_results[["selected_collection"] + url_cols].dropna().head(10))
+        if not valid_urls.empty:
+            st.info(f"Found {len(valid_urls)} direct observation links.")
+            st.dataframe(valid_urls[["selected_collection", "obs_id", "ra", "dec", "access_url"]].head(20), use_container_width=True)
         else:
             st.warning("No direct FITS URLs were returned. Archive metadata is still available.")
     else:
-        st.warning("No observations found for these coordinates. Try increasing the Search Radius or changing RA/Dec.")
+        st.warning("No observations found for these coordinates. Try increasing the Search Radius (e.g. 5.0) or changing RA/Dec.")
 else:
     st.info("Please select at least one collection from the sidebar.")
 
-# 7. Footer / About Section
+# 7. Project Information Footer
 st.markdown("---")
 st.markdown("### 🚀 About MECH ORBIT")
 st.write("MECH ORBIT is a student astronomy project designed to explore public SPHEREx infrared observations.")
