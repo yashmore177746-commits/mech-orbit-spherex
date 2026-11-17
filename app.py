@@ -12,7 +12,6 @@ from astropy.io import fits
 from astropy.io.votable import parse_single_table
 from astropy.visualization import ImageNormalize, AsinhStretch
 
-# Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
@@ -62,7 +61,6 @@ def make_session():
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
-    # Note: Removed "Accept: text/csv" so VOTABLE XML returns cleanly
     session.headers.update({
         "User-Agent": "MECH-ORBIT-SPHEREx-Explorer/1.0"
     })
@@ -70,7 +68,7 @@ def make_session():
     return session
 
 # ==========================================
-# ARCHIVE SEARCH (VOTABLE - ZERO COLUMN SHIFT)
+# ARCHIVE SEARCH (VOTABLE)
 # ==========================================
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -100,15 +98,12 @@ def search_archive(collection, ra, dec, radius):
     if b"<html" in lower_head or b"<!doctype" in lower_head or b"proxy error" in lower_head:
         raise ValueError("NASA archive returned an HTML/proxy error.")
 
-    # Check if IRSA returned a VOTable QUERY_STATUS ERROR
     if b'name="query_status" value="error"' in lower_head:
         raise ValueError("NASA IRSA reported a query parameter fault.")
 
-    # Parse VOTable XML cleanly so commas in text never shift columns
     table = parse_single_table(io.BytesIO(raw)).to_table()
     df = table.to_pandas()
 
-    # Decode any byte-string columns to normal UTF-8 strings
     for col in df.select_dtypes(include=["object"]).columns:
         df[col] = df[col].apply(
             lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
@@ -354,7 +349,6 @@ if st.session_state.searched:
             use_container_width=True
         )
 
-        # CSV Download Button
         csv_bytes = results_df.to_csv(index=False).encode("utf-8")
         st.download_button(
             label="📥 Download Archive CSV",
@@ -365,16 +359,17 @@ if st.session_state.searched:
 
         # ==========================================
         # SPHEREx IMAGE EXPLORER
-# ==========================================
-st.divider()
-st.subheader("🌌 SPHEREx Image Explorer")
-fits_df = pd.DataFrame()
-if "access_url" in results_df.columns:
-fits_df = results_df[
-results_df["access_url"]
-.astype(str)
-.str.contains(r"https?://.*.fits", case=False, na=False)
-].reset_index(drop=True)
+        # ==========================================
+
+        st.divider()
+        st.subheader("🌌 SPHEREx Image Explorer")
+
+        fits_df = pd.DataFrame()
+
+        if "access_url" in results_df.columns:
+            url_series = results_df["access_url"].astype(str)
+mask = url_series.str.contains(r"https?://.*.fits", case=False, na=False)
+fits_df = results_df[mask].reset_index(drop=True)
 if not fits_df.empty:
 selected_idx = st.selectbox(
 f"Select an infrared FITS image to render ({len(fits_df)} available):",
