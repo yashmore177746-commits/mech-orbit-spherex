@@ -12,7 +12,6 @@ from astropy.io import fits
 from astropy.io.votable import parse_single_table
 from astropy.visualization import ImageNormalize, AsinhStretch
 
-# SSL चेतावणी लपवण्यासाठी
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
@@ -38,7 +37,7 @@ if "errors" not in st.session_state:
     st.session_state.errors = []
 
 # ==========================================
-# HTTP SESSION WITH RETRIES & SSL FIX
+# HTTP SESSION WITH RETRIES
 # ==========================================
 
 def make_session():
@@ -51,7 +50,7 @@ def make_session():
         read=3,
         backoff_factor=2,
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET",),
+        allowed_methods=["GET"],
         raise_on_status=False
     )
 
@@ -59,13 +58,13 @@ def make_session():
     session.mount("https://", adapter)
 
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MECH-ORBIT/1.0"
+        "User-Agent": "MECH-ORBIT-SPHEREx-Explorer/1.0"
     })
 
     return session
 
 # ==========================================
-# ARCHIVE SEARCH (SMART CSV + VOTABLE PARSER)
+# ARCHIVE SEARCH
 # ==========================================
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -89,25 +88,24 @@ def search_archive(collection, ra, dec, radius):
     if not response.content:
         raise ValueError("Empty response from NASA archive.")
 
-    raw_bytes = response.content.lstrip()
-    lower_preview = raw_bytes[:3000].lower()
+    raw = response.content.lstrip()
+    lower_head = raw[:3000].lower()
 
-    if lower_preview.startswith(b"<html") or b"proxy error" in lower_preview:
-        raise ValueError("NASA archive returned an HTML/proxy error.")
+    if b"<html" in lower_head or b"<!doctype" in lower_head or b"proxy error" in lower_head:
+        raise ValueError("NASA archive returned an HTML page instead of CSV data.")
 
-    if raw_bytes.startswith(b"<?xml") or b"<votable" in lower_preview:
-        table = parse_single_table(io.BytesIO(raw_bytes)).to_table()
+    if raw.startswith(b"<?xml") or b"<votable" in lower_head:
+        table = parse_single_table(io.BytesIO(raw)).to_table()
         df = table.to_pandas()
+        for col in df.select_dtypes(include=("object",)).columns:
+            df[col] = df[col].apply(
+                lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
+            )
     else:
-        df = pd.read_csv(io.BytesIO(raw_bytes))
-
-    for col in df.select_dtypes(include=("object",)).columns:
-        df[col] = df[col].apply(
-            lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
-        )
+        df = pd.read_csv(io.BytesIO(raw))
 
     df.columns = [str(c).strip().lower() for c in df.columns]
-    df["collection"] = collection
+    df["selected_collection"] = collection
 
     return df
 
@@ -139,8 +137,7 @@ def load_fits(url):
                 continue
 
             while data.ndim > 2:
-                mid_idx = data.shape // 2
-                data = data[mid_idx]
+                data = data[data.shape[0] // 2]
 
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), hdu.name
@@ -159,7 +156,7 @@ def show_image(url, heading):
             image, extension = load_fits(url)
 
         finite = image[np.isfinite(image)]
-        low, high = np.percentile(finite, (1, 99.5))
+        low, high = np.percentile(finite, [1, 99.5])
 
         if low == high:
             low = float(finite.min())
@@ -187,112 +184,68 @@ def show_image(url, heading):
         st.pyplot(fig, clear_figure=True)
         plt.close(fig)
 
-        height, width = image.shape
         st.caption(
             f"Extension: {extension} | "
-            f"Size: {width} × {height} pixels"
+            f"Size: {image.shape[1]} × {image.shape[0]} px"
         )
 
-        st.link_button(
-            "Open Original FITS",
-            url,
-            use_container_width=True
-        )
-
-    except Exception as error:
-        st.warning(f"Image unavailable: {error}")
+    except Exception as e:
+        st.error(f"Could not render FITS image: {e}")
 
 # ==========================================
-# SIDEBAR CONTROLS
-# ==========================================
-
-with st.sidebar:
-    st.header("🔭 Search the Sky")
-
-    ra = st.number_input(
-        "Right Ascension (degrees)",
-        min_value=0.0,
-        max_value=360.0,
-        value=127.69,
-        step=0.1,
-        format="%.4f"
-    )
-
-    dec = st.number_input(
-        "Declination (degrees)",
-        min_value=-90.0,
-        max_value=90.0,
-        value=-39.17,
-        step=0.1,
-        format="%.4f"
-    )
-
-    radius = st.number_input(
-        "Search Radius (degrees)",
-        min_value=0.01,
-        max_value=5.0,
-        value=0.10,
-        step=0.05,
-        format="%.2f"
-    )
-
-    collections = st.multiselect(
-        "SPHEREx Collections",
-        options=(
-            "spherex_dr1",
-            "spherex_qr3",
-            "spherex_dr1_deep",
-            "spherex_qr3_deep"
-        ),
-        default=("spherex_dr1", "spherex_qr3")
-    )
-
-    search_btn = st.button("🚀 Search NASA Archive", type="primary", use_container_width=True)
-    clear_btn = st.button("🗑️ Clear Results", use_container_width=True)
-
-    st.caption("Source: NASA/IPAC IRSA")
-
-if clear_btn:
-    st.session_state.results = pd.DataFrame()
-    st.session_state.errors = []
-    st.rerun()
-
-# ==========================================
-# MAIN UI & SEARCH EXECUTION
+# UI HEADER & SIDEBAR CONTROLS
 # ==========================================
 
 st.title("🌌 MECH ORBIT")
 st.subheader("SPHEREx Sky Explorer")
-st.write("Explore real infrared observations from NASA/IPAC Infrared Science Archive.")
+st.write("Explore real infrared observations from NASA/IPAC Infrared Science Archive (IRSA).")
+
+with st.sidebar:
+    st.header("🔭 Search Parameters")
+
+    collections = st.multiselect(
+        "Select Datasets",
+        options=["spherex_dr1", "spherex_qr3"],
+        default=["spherex_dr1", "spherex_qr3"]
+    )
+
+    ra = st.number_input("Right Ascension (RA in deg)", min_value=0.0, max_value=360.0, value=127.6944, format="%.4f")
+    dec = st.number_input("Declination (Dec in deg)", min_value=-90.0, max_value=90.0, value=-39.1776, format="%.4f")
+    radius = st.number_input("Search Radius (deg)", min_value=0.01, max_value=5.0, value=0.10, step=0.05, format="%.2f")
+
+    search_btn = st.button("Search NASA Archive", type="primary", use_container_width=True)
+
+# ==========================================
+# SEARCH EXECUTION
+# ==========================================
 
 if search_btn:
+    st.session_state.results = pd.DataFrame()
     st.session_state.errors = []
-    all_dfs = []
 
     if not collections:
-        st.warning("Please select at least one SPHEREx collection.")
+        st.warning("Please select at least one dataset from the sidebar.")
     else:
+        all_dfs = []
         for col in collections:
-            st.write(f"Searching: `{col}`...")
+            st.write(f"Searching: **{col}** ...")
             try:
-                df = search_archive(col, ra, dec, radius)
-                if not df.empty:
-                    all_dfs.append(df)
-            except Exception as e:
-                st.session_state.errors.append(f"{col}: {str(e)}")
+                df_part = search_archive(col, ra, dec, radius)
+                if not df_part.empty:
+                    all_dfs.append(df_part)
+            except Exception as err:
+                st.session_state.errors.append(f"{col}: {err}")
 
         if all_dfs:
             st.session_state.results = pd.concat(all_dfs, ignore_index=True)
-        else:
-            st.session_state.results = pd.DataFrame()
 
 # ==========================================
-# DISPLAY ERRORS & RESULTS
+# ERRORS & RESULTS DISPLAY
 # ==========================================
 
 if st.session_state.errors:
     st.warning("Some NASA archive requests could not be completed.")
-    with st.expander("View search errors"):
+    with st.expander("View search errors", expanded=True):
         for err in st.session_state.errors:
             st.error(err)
 
@@ -301,48 +254,58 @@ results_df = st.session_state.results
 if not results_df.empty:
     st.success(f"Found {len(results_df)} observations!")
 
-    possible_cols = ("collection", "obs_id", "s_ra", "s_dec", "em_min", "em_max", "t_exptime", "access_url")
-    display_cols = [c for c in possible_cols if c in results_df.columns]
-
-    st.dataframe(results_df[display_cols] if display_cols else results_df, use_container_width=True)
+    st.subheader("📊 Observation Metadata")
+    st.dataframe(results_df, use_container_width=True)
 
     csv_data = results_df.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="📥 Download Results as CSV",
+        label="⬇️ Download Metadata CSV",
         data=csv_data,
-        file_name=f"spherex_ra{ra}_dec{dec}.csv",
+        file_name=f"spherex_obs_ra{ra}_dec{dec}.csv",
         mime="text/csv"
     )
 
-    if "access_url" in results_df.columns:
-        valid_urls = results_df["access_url"].dropna().tolist()
+    # FITS URLs शोधणे
+    url_col = None
+    for candidate in ["access_url", "sia_url", "cloud_access", "url"]:
+        if candidate in results_df.columns:
+            url_col = candidate
+            break
+
+    if url_col:
+        valid_rows = results_df[results_df[url_col].notna()].reset_index(drop=True)
+        valid_urls = valid_rows[url_col].tolist()
+
         if valid_urls:
             st.divider()
             st.subheader("🖼️ FITS Image Visualization & Comparison")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                idx1 = st.selectbox(
-                    "Select Observation 1",
-                    range(len(valid_urls)),
-                    format_func=lambda i: f"Obs #{i+1} ({results_df.iloc[i].get('collection', '')})"
-                )
-                show_image(valid_urls[idx1], f"Observation #{idx1+1}")
+            if len(valid_urls) == 1:
+                show_image(valid_urls[0], "Observation #1")
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    idx1 = st.selectbox(
+                        "Select First Observation",
+                        range(len(valid_urls)),
+                        index=0,
+                        format_func=lambda i: f"Obs #{i+1} ({valid_rows.iloc[i].get('selected_collection', '')})"
+                    )
+                    show_image(valid_urls[idx1], f"Observation #{idx1+1}")
 
-            if len(valid_urls) > 1:
                 with col2:
                     idx2 = st.selectbox(
-                        "Select Observation 2",
+                        "Select Second Observation",
                         range(len(valid_urls)),
-                        index=1,
-                        format_func=lambda i: f"Obs #{i+1} ({results_df.iloc[i].get('collection', '')})"
+                        index=min(1, len(valid_urls) - 1),
+                        format_func=lambda i: f"Obs #{i+1} ({valid_rows.iloc[i].get('selected_collection', '')})"
                     )
                     show_image(valid_urls[idx2], f"Observation #{idx2+1}")
 else:
     if search_btn and not st.session_state.errors:
         st.info("No observations found for these coordinates. Try increasing the Search Radius or changing RA/Dec.")
     elif not search_btn:
-        st.info("Enter coordinates and press Search NASA Archive.")
+        st.info("Enter coordinates in the sidebar and press Search NASA Archive.")
 
 # ==========================================
 # ABOUT SECTION
@@ -350,3 +313,17 @@ else:
 
 st.divider()
 st.subheader("🚀 About MECH ORBIT")
+st.write("MECH ORBIT is a student astronomy project designed to explore public SPHEREx infrared observations.")
+st.markdown("""
+### Project Features
+* NASA/IPAC-IRSA archive connectivity
+* Astronomical coordinate search
+* SPHEREx DR1 and QR3 datasets
+* Observation metadata
+* FITS image visualization
+* Two-observation comparison
+* CSV data export
+* Automatic request retries
+* Error handling
+""")
+st.caption("Data Source: NASA/IPAC Infrared Science Archive (IRSA)")
