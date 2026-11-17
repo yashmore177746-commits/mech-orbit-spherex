@@ -10,81 +10,104 @@ from astropy.visualization import ImageNormalize, AsinhStretch
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-TAP_URL = "https://caltech.edu"
+HIPS2FITS_URL = "https://unistra.fr"
 
 st.set_page_config(page_title="MECH ORBIT | SPHEREx Explorer", page_icon="🌌", layout="wide")
+
+# ==========================================
+# SPACE BACKGROUND & GLASSMORPHISM THEME
+# ==========================================
+
+SPACE_BG_CSS = """
+<style>
+[data-testid="stAppViewContainer"] {
+    background-image: linear-gradient(rgba(5, 8, 20, 0.72), rgba(5, 8, 20, 0.85)),
+                      url("https://unsplash.com");
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    color: #f0f4ff;
+}
+
+[data-testid="stSidebar"] {
+    background-color: rgba(10, 15, 35, 0.85);
+    backdrop-filter: blur(12px);
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+[data-testid="stHeader"] {
+    background: rgba(0, 0, 0, 0);
+}
+
+div.stButton > button {
+    border-radius: 10px;
+    font-weight: 600;
+}
+
+div[data-testid="stExpander"], div.stDataFrame {
+    background-color: rgba(15, 22, 48, 0.75);
+    border-radius: 12px;
+    padding: 8px;
+}
+</style>
+"""
+st.markdown(SPACE_BG_CSS, unsafe_allow_html=True)
+
+# ==========================================
+# SESSION STATE
+# ==========================================
 
 if "results" not in st.session_state:
     st.session_state.results = pd.DataFrame()
 if "searched" not in st.session_state:
     st.session_state.searched = False
-if "source_note" not in st.session_state:
-    st.session_state.source_note = ""
 if "target_name" not in st.session_state:
     st.session_state.target_name = "Orion Nebula (M42)"
 
 
-def is_html_response(raw_bytes):
-    head = raw_bytes[:1000].lstrip().lower()
-    return head.startswith(b"<!doctype") or head.startswith(b"<html") or b"<title>" in head
-
-
 @st.cache_data(ttl=600, show_spinner=False)
 def search_archive(collection, ra, dec, radius):
-    session = requests.Session()
-    session.verify = False
-    session.headers.update({"User-Agent": "MECH-ORBIT-SPHEREx-Explorer/1.0"})
-
-    adql = (
-        f"SELECT TOP 50 obs_collection, obs_id, s_ra, s_dec, t_exptime, em_min, em_max, access_url "
-        f"FROM ivoa.obscore WHERE obs_collection LIKE '%spherex%' "
-        f"AND 1 = CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', {ra}, {dec}, {radius}))"
-    )
-    try:
-        r1 = session.post(TAP_URL, data={"QUERY": adql, "LANG": "ADQL", "FORMAT": "csv"}, timeout=(10, 25))
-        if r1.status_code == 200 and r1.content and not is_html_response(r1.content):
-            df1 = pd.read_csv(io.BytesIO(r1.content))
-            if not df1.empty:
-                df1.columns = [str(c).strip().lower() for c in df1.columns]
-                df1["selected_collection"] = collection
-                return df1, "Direct NASA/IPAC IRSA SPHEREx Archive"
-    except Exception:
-        pass
-
-    ir_bands = (
-        ("WISE 3.4 micron (Near-IR)", "WISE 3.4", 3.4e-6),
-        ("WISE 4.6 micron (Mid-IR)", "WISE 4.6", 4.6e-6),
-        ("WISE 12 micron (Mid-IR)", "WISE 12", 1.2e-5),
-        ("2MASS-J (1.25 micron Near-IR)", "2MASS-J", 1.25e-6),
-        ("2MASS-K (2.17 micron Near-IR)", "2MASS-K", 2.17e-6)
+    ir_surveys = (
+        ("AllWISE W1 (3.4 micron Near-IR)", "CDS/P/allWISE/W1", 3.4e-6),
+        ("AllWISE W2 (4.6 micron Mid-IR)", "CDS/P/allWISE/W2", 4.6e-6),
+        ("AllWISE W3 (12 micron Mid-IR)", "CDS/P/allWISE/W3", 1.2e-5),
+        ("AllWISE W4 (22 micron Far-IR)", "CDS/P/allWISE/W4", 2.2e-5),
+        ("2MASS J-Band (1.25 micron Near-IR)", "CDS/P/2MASS/J", 1.25e-6),
+        ("2MASS K-Band (2.17 micron Near-IR)", "CDS/P/2MASS/K", 2.17e-6)
     )
 
     rows = list()
-    fov = max(0.20, min(float(radius) * 2.0, 2.0))
-    for band_label, survey_code, wave_m in ir_bands:
+    fov = max(0.15, min(float(radius) * 2.0, 2.5))
+
+    for band_label, hips_id, wave_m in ir_surveys:
         fits_link = (
-            f"https://nasa.gov?"
-            f"Position={ra},{dec}&Survey={survey_code}&Size={fov}&Pixels=300&Return=FITS"
+            f"{HIPS2FITS_URL}?hips={hips_id}"
+            f"&ra={ra}&dec={dec}&fov={fov}"
+            f"&width=350&height=350&projection=TAN&format=fits"
         )
         rows.append({
-            "selected_collection": f"{collection} (NASA IR SkyView)",
-            "obs_id": f"{survey_code}_RA{ra:.2f}_DEC{dec:.2f}",
+            "selected_collection": collection,
+            "obs_id": f"{hips_id.split('/')[-1]}_RA{ra:.2f}_DEC{dec:.2f}",
             "band_name": band_label,
             "s_ra": ra,
             "s_dec": dec,
-            "em_min": wave_m,
+            "wavelength_m": wave_m,
             "access_url": fits_link
         })
 
-    return pd.DataFrame(rows), "NASA Goddard SkyView Infrared FITS Service"
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_fits(url):
-    resp = requests.get(url, verify=False, timeout=(25, 180))
+    headers = {"User-Agent": "MECH-ORBIT-SPHEREx-Explorer/1.0"}
+    resp = requests.get(url, headers=headers, verify=False, timeout=(25, 180))
     resp.raise_for_status()
-    if is_html_response(resp.content):
-        raise ValueError("Archive returned HTML instead of FITS binary.")
+
+    head = resp.content[:500].lstrip().lower()
+    if head.startswith(b"<!doctype") or head.startswith(b"<html"):
+        raise ValueError("Server returned HTML instead of FITS binary.")
+
     with fits.open(io.BytesIO(resp.content), memmap=False) as hdus:
         for hdu in hdus:
             data = getattr(hdu, "data", None)
@@ -96,13 +119,14 @@ def load_fits(url):
                 data = data[mid]
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), (hdu.name or "PRIMARY")
+
     raise ValueError("No valid 2D image found in FITS file.")
 
 
 def show_image(url, heading):
     st.markdown(f"### 🔭 {heading}")
     try:
-        with st.spinner("Downloading & rendering NASA FITS infrared photo..."):
+        with st.spinner("Downloading & rendering real Infrared FITS image..."):
             image, extension = load_fits(url)
 
         finite = image[np.isfinite(image)]
@@ -111,24 +135,33 @@ def show_image(url, heading):
             low, high = float(finite.min()), float(finite.max()) + 1e-6
 
         fig, ax = plt.subplots(figsize=(6, 5))
+        fig.patch.set_facecolor("#080c1c")
+        ax.set_facecolor("#080c1c")
+
         norm = ImageNormalize(vmin=low, vmax=high, stretch=AsinhStretch())
         ax.imshow(np.ma.masked_invalid(image), origin="lower", cmap="magma", norm=norm)
-        ax.set_title(heading)
-        ax.set_xlabel("Pixel X")
-        ax.set_ylabel("Pixel Y")
+        ax.set_title(heading, color="white", pad=12)
+        ax.set_xlabel("Pixel X", color="#cbd5e1")
+        ax.set_ylabel("Pixel Y", color="#cbd5e1")
+        ax.tick_params(colors="#cbd5e1")
+
         st.pyplot(fig, clear_figure=True)
         plt.close(fig)
 
         height, width = image.shape
         st.caption(f"FITS Extension: {extension} | Resolution: {width} x {height} pixels")
-        st.link_button("📥 Download Original NASA FITS File", url, use_container_width=True)
+        st.link_button("📥 Download Original FITS File", url, use_container_width=True)
     except Exception as err:
         st.warning(f"Image unavailable: {err}")
 
 
+# ==========================================
+# MAIN UI
+# ==========================================
+
 st.title("🌌 MECH ORBIT")
 st.subheader("SPHEREx & Infrared Sky Explorer")
-st.write("Explore real infrared FITS observations and space imagery from NASA archives.")
+st.write("Explore real infrared FITS observations and deep-space imagery.")
 
 st.sidebar.header("🔭 Target Coordinates")
 
@@ -158,28 +191,25 @@ if st.sidebar.button("🚀 Search NASA Archive", type="primary", use_container_w
     st.session_state.results = pd.DataFrame()
     st.session_state.target_name = choice
     frames = list()
-    note = ""
     for col in (collections or ("spherex_dr1",)):
-        df_part, note = search_archive(col, ra, dec, radius)
+        df_part = search_archive(col, ra, dec, radius)
         if not df_part.empty:
             frames.append(df_part)
     if frames:
         st.session_state.results = pd.concat(frames, ignore_index=True)
-        st.session_state.source_note = note
 
 if st.session_state.searched:
     df = st.session_state.results
     if not df.empty:
-        st.success(f"Loaded {len(df)} real infrared FITS observations ({st.session_state.source_note}).")
+        st.success(f"Loaded {len(df)} real infrared FITS observations.")
 
-        # फोटो सर्वात वर लगेच दाखवणे (Image Explorer First)
         st.subheader("🌌 Infrared FITS Image Viewer")
         idx = st.selectbox(
             f"Choose Infrared Wavelength Band ({len(df)} available):",
             options=list(range(len(df))),
-            format_func=lambda i: f"{df.loc[i].get('band_name', df.loc[i].get('obs_id', f'Obs #{i+1}'))}"
+            format_func=lambda i: f"{df.loc[i, 'band_name']}"
         )
-        band_title = df.loc[idx].get("band_name", df.loc[idx].get("obs_id", f"Obs #{idx+1}"))
+        band_title = df.loc[idx, "band_name"]
         show_image(df.loc[idx, "access_url"], f"{st.session_state.target_name} — {band_title}")
 
         st.divider()
@@ -189,4 +219,4 @@ if st.session_state.searched:
 
 st.divider()
 st.subheader("🚀 About MECH ORBIT")
-st.write("MECH ORBIT is a student astronomy project designed to explore real NASA infrared sky observations and FITS imagery.")
+st.write("MECH ORBIT is a student astronomy project designed to explore real infrared sky observations and FITS imagery.")
