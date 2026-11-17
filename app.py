@@ -6,31 +6,19 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 from astropy.io import fits
-from astropy.visualization import (
-    ImageNormalize,
-    AsinhStretch
-)
+from astropy.visualization import ImageNormalize, AsinhStretch
 
-urllib3.disable_warnings(
-    urllib3.exceptions.InsecureRequestWarning
-)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-HIPS_URL = (
-    "https://unistra.fr"
-    "hips-image-services/hips2fits"
-)
+HIPS_URL = "https://alasky.cds.unistra.fr/hips-image-services/hips2fits"
 
 st.set_page_config(
-    page_title="MECH ORBIT | SPHEREx",
+    page_title="MECH ORBIT | SPHEREx & IR Explorer",
     page_icon="🌌",
     layout="wide"
 )
 
-BG_URL = (
-    "https://unsplash.com"
-    "photo-1462331940025-496dfbfc7564"
-    "?auto=format&fit=crop&w=1920&q=80"
-)
+BG_URL = "https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1920&q=80"
 
 SPACE_CSS = f"""
 <style>
@@ -47,12 +35,25 @@ SPACE_CSS = f"""
 [data-testid="stSidebar"] {{
     background-color: rgba(8, 13, 30, 0.88);
     backdrop-filter: blur(14px);
+    border-right: 1px solid rgba(255, 255, 255, 0.14);
+}}
+[data-testid="stHeader"] {{
+    background: rgba(0, 0, 0, 0);
 }}
 div[data-testid="stMetric"] {{
     background-color: rgba(15, 23, 52, 0.82);
-    border: 1px solid rgba(120, 160, 255, 0.3);
+    border: 1px solid rgba(120, 160, 255, 0.30);
     padding: 12px 16px;
     border-radius: 12px;
+}}
+div[data-testid="stExpander"], div.stDataFrame {{
+    background-color: rgba(12, 18, 42, 0.78);
+    border-radius: 12px;
+    padding: 8px;
+}}
+div.stButton > button {{
+    border-radius: 10px;
+    font-weight: 600;
 }}
 </style>
 """
@@ -68,33 +69,27 @@ if "target_name" not in st.session_state:
 BAND_INFO = {
     "AllWISE W1 (3.4 micron Near-IR)": (
         "Old Stars & Galactic Structure",
-        "Penetrates dust to reveal older stars "
-        "and core galactic structure."
+        "Penetrates dust to reveal older stars and core galactic structure."
     ),
     "AllWISE W2 (4.6 micron Mid-IR)": (
         "Brown Dwarfs & Warm Gas",
-        "Detects cool brown dwarfs and warm "
-        "molecular gas clouds."
+        "Detects cool brown dwarfs and warm molecular gas clouds."
     ),
     "AllWISE W3 (12 micron Mid-IR)": (
         "PAH Molecules & Stellar Nurseries",
-        "Highlights glowing dust lanes where "
-        "new stars are actively forming."
+        "Highlights glowing dust lanes where new stars are actively forming."
     ),
     "AllWISE W4 (22 micron Far-IR)": (
         "Protostars & Hot Cosmic Dust",
-        "Captures thermal emission from dust "
-        "cocoons around newborn protostars."
+        "Captures thermal emission from dust cocoons around newborn protostars."
     ),
     "2MASS J-Band (1.25 micron Near-IR)": (
         "Dust-Piercing Stellar Photometry",
-        "Cuts through galactic extinction 10x "
-        "better than visible optical light."
+        "Cuts through galactic extinction 10x better than visible optical light."
     ),
     "2MASS K-Band (2.17 micron Near-IR)": (
         "Deep Galactic Core Penetration",
-        "Reveals young stellar objects inside "
-        "dense molecular clouds."
+        "Reveals young stellar objects inside dense molecular clouds."
     )
 }
 
@@ -145,7 +140,8 @@ def load_fits(url):
                 continue
             data = np.asarray(data)
             while data.ndim > 2:
-                data = data[data.shape // 2]
+                mid = data.shape[0] // 2
+                data = data[mid]
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), (hdu.name or "PRIMARY")
     raise ValueError("No valid 2D image found in FITS file.")
@@ -285,13 +281,14 @@ if st.session_state.searched:
         st.dataframe(df, use_container_width=True)
         st.download_button(
             "📥 Download Archive CSV",
-df.to_csv(index=False).encode("utf-8"),
-f"mechorbit_{ra}_{dec}.csv",
-"text/csv"
-)
+            df.to_csv(index=False).encode("utf-8"),
+            f"mechorbit_{ra}_{dec}.csv",
+            "text/csv"
+        )
+
 st.divider()
 st.subheader("🚀 About MECH ORBIT")
 st.write(
-"MECH ORBIT empowers students and citizen scientists to explore "
-"star-forming regions and cosmic dust using real infrared FITS data."
+    "MECH ORBIT empowers students and citizen scientists to explore "
+    "star-forming regions and cosmic dust using real infrared FITS data."
 )
