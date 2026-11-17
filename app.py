@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from astropy.io import fits
-from astropy.io.votable import parse_single_table
 from astropy.visualization import ImageNormalize, AsinhStretch
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -20,6 +19,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 
 SIA_URL = "https://caltech.edu"
+
 st.set_page_config(
     page_title="MECH ORBIT | SPHEREx Explorer",
     page_icon="🌌",
@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# SESSION
+# SESSION STATE
 # ==========================================
 
 if "results" not in st.session_state:
@@ -50,7 +50,7 @@ def make_session():
         read=3,
         backoff_factor=2,
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=["GET"],
+        allowed_methods=("GET",),
         raise_on_status=False
     )
 
@@ -58,23 +58,24 @@ def make_session():
     session.mount("https://", adapter)
 
     session.headers.update({
-        "User-Agent": "MECH-ORBIT-SPHEREx-Explorer/1.0"
+        "User-Agent": "MECH-ORBIT-SPHEREx-Explorer/1.0",
+        "Accept": "text/csv"
     })
 
     return session
 
 # ==========================================
-# ARCHIVE SEARCH (EXACT COLUMN ALIGNMENT)
+# ARCHIVE SEARCH (WORKING CSV + COLUMN FIX)
 # ==========================================
 
 @st.cache_data(ttl=600, show_spinner=False)
 def search_archive(collection, ra, dec, radius):
     session = make_session()
 
-    # RESPONSEFORMAT न दिल्यास NASA सर्व्हर अचूक VOTable (XML) पाठवतो
     params = {
         "COLLECTION": collection,
-        "POS": f"circle {ra} {dec} {radius}"
+        "POS": f"circle {ra} {dec} {radius}",
+        "RESPONSEFORMAT": "CSV"
     }
 
     response = session.get(
@@ -88,26 +89,24 @@ def search_archive(collection, ra, dec, radius):
     if not response.content:
         raise ValueError("Empty response from NASA archive.")
 
-    raw = response.content.lstrip()
-    lower_head = raw[:3000].lower()
+    content = response.content.lstrip().lower()
 
-        if lower_head.startswith(b"<html") or lower_head.startswith(b"<!doctype html") or b"proxy error" in lower_head:
+    if content.startswith(b"<html") or b"proxy error" in content[:3000]:
         raise ValueError("NASA archive returned an HTML/proxy error.")
- 
-    # Astropy च्या VOTable पार्सरमुळे कॉलम्स कधीच सरकत नाहीत
-    if raw.startswith(b"<?xml") or b"<votable" in lower_head:
-        table = parse_single_table(io.BytesIO(raw)).to_table()
-        df = table.to_pandas()
-        for col in df.select_dtypes(include=("object",)).columns:
-            df[col] = df[col].apply(
-                lambda x: x.decode("utf-8") if isinstance(x, bytes) else x
-            )
-    else:
-        df = pd.read_csv(io.BytesIO(raw), on_bad_lines="skip")
 
+    # मघाशी ज्या पद्धतीने ३४८ ऑब्झर्व्हेशन्स आले होते तीच पद्धत
+    df = pd.read_csv(io.BytesIO(response.content), on_bad_lines="skip")
     df.columns = [str(c).strip().lower() for c in df.columns]
-    df["selected_collection"] = collection
 
+    # जर index_col मुळे कॉलम्स सरकले असतील तर ते आपोआप सरळ करणे
+    if "s_ra" in df.columns and df["s_ra"].astype(str).str.contains("SPHEREx", case=False, na=False).any():
+        df = df.reset_index()
+        # मूळ कॉलम्सची नावे योग्य जागी बसवणे
+        orig_cols = list(df.columns[1:])
+        df = df.iloc[:, :len(orig_cols)]
+        df.columns = orig_cols
+
+    df["selected_collection"] = collection
     return df
 
 # ==========================================
@@ -138,7 +137,7 @@ def load_fits(url):
                 continue
 
             while data.ndim > 2:
-                data = data[data.shape[0] // 2]
+                data = data[data.shape // 2]
 
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), hdu.name
@@ -157,7 +156,7 @@ def show_image(url, heading):
             image, extension = load_fits(url)
 
         finite = image[np.isfinite(image)]
-        low, high = np.percentile(finite, [1, 99.5])
+        low, high = np.percentile(finite, (1, 99.5))
 
         if low == high:
             low = float(finite.min())
@@ -187,7 +186,7 @@ def show_image(url, heading):
 
         st.caption(
             f"Extension: {extension} | "
-            f"Size: {image.shape[1]} × {image.shape[0]} pixels"
+            f"Size: {image.shape} × {image.shape} pixels"
         )
 
         st.link_button(
@@ -247,8 +246,8 @@ with st.sidebar:
 
     collections = st.multiselect(
         "SPHEREx Collections",
-        options=["spherex_dr1", "spherex_qr3"],
-        default=["spherex_dr1", "spherex_qr3"]
+        options=("spherex_dr1", "spherex_qr3"),
+        default=("spherex_dr1", "spherex_qr3")
     )
 
     search_btn = st.button("🚀 Search NASA Archive", type="primary", use_container_width=True)
@@ -304,10 +303,10 @@ if not results_df.empty:
 
     st.subheader("🛰️ Archive Observations")
 
-    wanted_cols = [
+    wanted_cols = (
         "selected_collection", "obs_id", "s_ra", "s_dec",
         "t_min", "t_max", "em_min", "em_max", "access_url"
-    ]
+    )
     show_cols = [c for c in wanted_cols if c in results_df.columns]
 
     st.dataframe(results_df[show_cols] if show_cols else results_df, use_container_width=True)
@@ -322,12 +321,16 @@ if not results_df.empty:
     st.divider()
     st.subheader("🌌 SPHEREx Image Explorer")
 
+    # डेटाफ्रेममधील कोणत्याही कॉलममध्ये FITS URL असल्यास ती शोधणे
     fits_urls = []
-    if "access_url" in results_df.columns:
-        fits_urls = [
-            str(u).strip() for u in results_df["access_url"].dropna()
+    for col in results_df.columns:
+        urls = [
+            str(u).strip() for u in results_df[col].dropna()
             if str(u).strip().startswith("http")
         ]
+        if urls:
+            fits_urls = urls
+            break
 
     if fits_urls:
         c1, c2 = st.columns(2)
@@ -340,6 +343,9 @@ if not results_df.empty:
                 show_image(fits_urls[idx2], f"Observation #{idx2+1}")
     else:
         st.warning("No direct FITS URLs were returned. Archive metadata is still available.")
+else:
+    if search_btn and not st.session_state.errors:
+        st.info("No observations found at these coordinates. Try increasing the Search Radius.")
 
 # ==========================================
 # ABOUT SECTION
@@ -352,12 +358,3 @@ st.markdown("""
 ### Project Features
 * NASA/IPAC-IRSA archive connectivity
 * Astronomical coordinate search
-* SPHEREx DR1 and QR3 datasets
-* Observation metadata
-* FITS image visualization
-* Two-observation comparison
-* CSV data export
-• Automatic request retries
-• Error handling
-""")
-st.caption("Data Source: NASA/IPAC Infrared Science Archive (IRSA)")
