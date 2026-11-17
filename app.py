@@ -6,13 +6,11 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 from astropy.io import fits
-from astropy.io.votable import parse_single_table
 from astropy.visualization import ImageNormalize, AsinhStretch
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SIA_URL = "https://caltech.edu"
-TAP_URL = "https://caltech.edu"
 
 st.set_page_config(page_title="MECH ORBIT | SPHEREx Explorer", page_icon="🌌", layout="wide")
 
@@ -24,53 +22,46 @@ if "searched" not in st.session_state:
     st.session_state.searched = False
 
 
-def parse_votable(raw_bytes):
-    table = parse_single_table(io.BytesIO(raw_bytes)).to_table()
-    df = table.to_pandas()
-    for col in df.select_dtypes(include=("object",)).columns:
-        df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x)
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    return df
-
-
 @st.cache_data(ttl=600, show_spinner=False)
 def search_archive(collection, ra, dec, radius):
     session = requests.Session()
     session.verify = False
     session.headers.update({"User-Agent": "MECH-ORBIT-SPHEREx-Explorer/1.0"})
 
-    sia_params = {
+    params = {
         "COLLECTION": collection,
         "POS": f"circle {ra} {dec} {radius}",
-        "RESPONSEFORMAT": "application/x-votable+xml"
+        "RESPONSEFORMAT": "CSV"
     }
 
-    try:
-        resp = session.get(SIA_URL, params=sia_params, timeout=(15, 60))
-        raw = resp.content.lstrip()
-        if resp.status_code == 200 and b"<votable" in raw[:2000].lower():
-            df = parse_votable(raw)
-            df["selected_collection"] = collection
-            return df
-    except Exception:
-        pass
+    resp = session.get(SIA_URL, params=params, timeout=(20, 120))
+    resp.raise_for_status()
 
-    adql = (
-        f"SELECT TOP 200 obs_collection, obs_id, s_ra, s_dec, t_exptime, "
-        f"em_min, em_max, dataproduct_type, access_format, access_url "
-        f"FROM ivoa.obscore WHERE obs_collection = '{collection}' "
-        f"AND CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', {ra}, {dec}, {radius})) = 1"
-    )
-    tap_resp = session.post(TAP_URL, data={"QUERY": adql, "LANG": "ADQL", "FORMAT": "votable"}, timeout=(20, 90))
-    tap_resp.raise_for_status()
-    tap_raw = tap_resp.content.lstrip()
+    raw = resp.content.lstrip()
+    if not raw:
+        raise ValueError("Empty response from NASA archive.")
+    if raw[:500].lower().startswith(b"<html") or b"proxy error" in raw[:2000].lower():
+        raise ValueError("NASA archive server busy (HTML/proxy error). Try smaller radius.")
 
-    if b"<votable" not in tap_raw[:2000].lower():
-        raise ValueError("NASA archive returned an unexpected response.")
-
-    df = parse_votable(tap_raw)
+    df = pd.read_csv(io.BytesIO(raw), on_bad_lines="skip", engine="python")
+    df.columns = [str(c).strip().lower() for c in df.columns]
     df["selected_collection"] = collection
     return df
+
+
+def find_fits_urls(df):
+    fits_records = list()
+    for idx, row in df.iterrows():
+        col_name = row.get("selected_collection", "spherex")
+        for cell in row.values:
+            val = str(cell).strip()
+            if val.startswith("http") and ".fits" in val.lower():
+                fits_records.append({
+                    "label": f"[{col_name}] Observation #{len(fits_records) + 1}",
+                    "url": val
+                })
+                break
+    return pd.DataFrame(fits_records)
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -122,7 +113,7 @@ st.write("Explore real infrared observations from NASA/IPAC Infrared Science Arc
 st.sidebar.header("🔭 Target Coordinates")
 ra = st.sidebar.number_input("Right Ascension (RA deg)", 0.0, 360.0, 127.8000, format="%.4f")
 dec = st.sidebar.number_input("Declination (Dec deg)", -90.0, 90.0, 40.6000, format="%.4f")
-radius = st.sidebar.number_input("Search Radius (deg)", 0.01, 2.0, 0.10, step=0.05, format="%.2f")
+radius = st.sidebar.number_input("Search Radius (deg)", 0.01, 2.0, 0.20, step=0.05, format="%.2f")
 
 st.sidebar.divider()
 collections = st.sidebar.multiselect(
@@ -156,24 +147,22 @@ if st.session_state.searched:
     df = st.session_state.results
     if not df.empty:
         st.success(f"NASA archive returned {len(df)} observations.")
-        cols = [c for c in ("selected_collection", "obs_id", "s_ra", "s_dec", "t_exptime", "em_min", "em_max", "access_url") if c in df.columns]
-        st.dataframe(df[cols] if cols else df, use_container_width=True)
+        st.dataframe(df, use_container_width=True)
 
         st.download_button("📥 Download Archive CSV", df.to_csv(index=False).encode("utf-8"), f"spherex_{ra}_{dec}.csv", "text/csv")
 
         st.divider()
         st.subheader("🌌 SPHEREx Image Explorer")
-        if "access_url" in df.columns:
-            fits_df = df[df["access_url"].astype(str).str.contains(r"https?://.*\.fits", case=False, na=False)].reset_index(drop=True)
-            if not fits_df.empty:
-                idx = st.selectbox(
-                    f"Select FITS image ({len(fits_df)} available):",
-                    options=list(range(len(fits_df))),
-                    format_func=lambda i: f"[{fits_df.loc[i, 'selected_collection']}] {fits_df.loc[i].get('obs_id', f'Obs #{i+1}')}"
-                )
-                show_image(fits_df.loc[idx, "access_url"], f"SPHEREx Observation #{idx+1}")
-            else:
-                st.warning("No direct FITS URLs returned.")
+        fits_df = find_fits_urls(df)
+        if not fits_df.empty:
+            idx = st.selectbox(
+                f"Select FITS image ({len(fits_df)} available):",
+                options=list(range(len(fits_df))),
+                format_func=lambda i: fits_df.loc[i, "label"]
+            )
+            show_image(fits_df.loc[idx, "url"], fits_df.loc[idx, "label"])
+        else:
+            st.warning("No direct FITS URLs returned.")
     else:
         st.info("No observations found at these coordinates. Try increasing radius or changing RA/Dec.")
 
