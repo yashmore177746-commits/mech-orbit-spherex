@@ -10,8 +10,7 @@ from astropy.visualization import ImageNormalize, AsinhStretch
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-HIPS_URL = "https://alasky.cds.unistra.fr/hips-image-services/hips2fits"
-
+HIPS_URL = "https://unistra.fr"
 st.set_page_config(
     page_title="MECH ORBIT | SPHEREx & IR Explorer",
     page_icon="🌌",
