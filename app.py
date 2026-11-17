@@ -26,7 +26,7 @@ if "results" not in st.session_state:
     st.session_state.results = pd.DataFrame()
 
 if "errors" not in st.session_state:
-    st.session_state.errors = []
+    st.session_state.errors = list()
 
 if "searched" not in st.session_state:
     st.session_state.searched = False
@@ -40,8 +40,8 @@ def make_session():
         connect=3,
         read=3,
         backoff_factor=2,
-        status_forcelist=,
-        allowed_methods=["GET"],
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
         raise_on_status=False
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -77,7 +77,7 @@ def search_archive(collection, ra, dec, radius):
     table = parse_single_table(io.BytesIO(raw)).to_table()
     df = table.to_pandas()
 
-    for col in df.select_dtypes(include=["object"]).columns:
+    for col in df.select_dtypes(include=("object",)).columns:
         df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x)
 
     df.columns = [str(c).strip().lower() for c in df.columns]
@@ -100,7 +100,8 @@ def load_fits(url):
             if data.ndim < 2:
                 continue
             while data.ndim > 2:
-                data = data[data.shape // 2]
+                mid = data.shape[0] // 2
+                data = data[mid]
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), (hdu.name or "PRIMARY")
 
@@ -117,7 +118,7 @@ def show_image(url, heading):
         if finite.size == 0:
             raise ValueError("FITS image contains no finite pixel values.")
 
-        low, high = np.percentile(finite, [1, 99.5])
+        low, high = np.percentile(finite, (1, 99.5))
         if low >= high:
             low = float(finite.min())
             high = float(finite.max()) + 1e-6
@@ -132,7 +133,8 @@ def show_image(url, heading):
         st.pyplot(fig, clear_figure=True)
         plt.close(fig)
 
-        st.caption(f"Extension: {extension} | Size: {image.shape} × {image.shape} pixels")
+        height, width = image.shape
+        st.caption(f"Extension: {extension} | Size: {width} × {height} pixels")
         st.link_button("Open Original FITS", url, use_container_width=True)
 
     except Exception as error:
@@ -155,7 +157,7 @@ def render_image_explorer(results_df):
         st.warning("No direct FITS URLs were returned. Archive metadata is still available.")
         return
 
-    labels = []
+    labels = list()
     for i in range(len(fits_df)):
         col_name = fits_df.loc[i, "selected_collection"]
         obs_name = fits_df.loc[i].get("obs_id", f"Observation #{i+1}")
@@ -185,16 +187,15 @@ st.write("Explore real infrared observations from NASA/IPAC Infrared Science Arc
 
 st.sidebar.header("🔭 Target Coordinates")
 
-preset = st.sidebar.selectbox(
-    "Quick Sky Presets:",
-    [
-        "Custom Coordinates",
-        "Orion Nebula (M42)",
-        "Galactic Center",
-        "Andromeda Galaxy (M31)",
-        "Large Magellanic Cloud (LMC)"
-    ]
+preset_options = (
+    "Custom Coordinates",
+    "Orion Nebula (M42)",
+    "Galactic Center",
+    "Andromeda Galaxy (M31)",
+    "Large Magellanic Cloud (LMC)"
 )
+
+preset = st.sidebar.selectbox("Quick Sky Presets:", preset_options)
 
 preset_coords = {
     "Custom Coordinates": (127.8000, 40.6000),
@@ -213,10 +214,13 @@ radius = st.sidebar.number_input("Search Radius (deg)", min_value=0.01, max_valu
 st.sidebar.divider()
 st.sidebar.header("🛰️ Collections")
 
+collection_options = ("spherex_dr1", "spherex_qr3", "spherex_dr1_deep", "spherex_dr1_cube")
+default_collections = ("spherex_dr1", "spherex_qr3")
+
 collections = st.sidebar.multiselect(
     "Select SPHEREx Collections:",
-    options=["spherex_dr1", "spherex_qr3", "spherex_dr1_deep", "spherex_dr1_cube"],
-    default=["spherex_dr1", "spherex_qr3"]
+    options=collection_options,
+    default=default_collections
 )
 
 search_clicked = st.sidebar.button("🚀 Search NASA Archive", type="primary", use_container_width=True)
@@ -224,12 +228,12 @@ search_clicked = st.sidebar.button("🚀 Search NASA Archive", type="primary", u
 if search_clicked:
     st.session_state.searched = True
     st.session_state.results = pd.DataFrame()
-    st.session_state.errors = []
+    st.session_state.errors = list()
 
     if not collections:
         st.warning("Please select at least one collection in the sidebar.")
     else:
-        collected_frames = []
+        collected_frames = list()
         for col in collections:
             st.write(f"Searching: **{col}** ...")
             try:
@@ -255,7 +259,7 @@ if st.session_state.searched:
         st.success(f"NASA archive returned {len(results_df)} observations.")
         st.subheader("🛰️ Archive Observations")
 
-        preferred_cols = [
+        preferred_cols = (
             "selected_collection",
             "obs_id",
             "s_ra",
@@ -266,7 +270,7 @@ if st.session_state.searched:
             "dataproduct_type",
             "access_format",
             "access_url"
-        ]
+        )
         visible_cols = [c for c in preferred_cols if c in results_df.columns]
         st.dataframe(results_df[visible_cols] if visible_cols else results_df, use_container_width=True)
 
