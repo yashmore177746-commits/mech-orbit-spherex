@@ -20,7 +20,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 
 SIA_URL = "https://caltech.edu"
-
 st.set_page_config(
     page_title="MECH ORBIT | SPHEREx Explorer",
     page_icon="🌌",
@@ -92,9 +91,9 @@ def search_archive(collection, ra, dec, radius):
     raw = response.content.lstrip()
     lower_head = raw[:3000].lower()
 
-    if lower_head.startswith(b"<html") or b"proxy error" in lower_head:
+        if lower_head.startswith(b"<html") or lower_head.startswith(b"<!doctype html") or b"proxy error" in lower_head:
         raise ValueError("NASA archive returned an HTML/proxy error.")
-
+ 
     # Astropy च्या VOTable पार्सरमुळे कॉलम्स कधीच सरकत नाहीत
     if raw.startswith(b"<?xml") or b"<votable" in lower_head:
         table = parse_single_table(io.BytesIO(raw)).to_table()
