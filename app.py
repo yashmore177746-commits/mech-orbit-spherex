@@ -6,18 +6,28 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 from astropy.io import fits
-from astropy.visualization import ImageNormalize, AsinhStretch
+from astropy.visualization import (
+    ImageNormalize,
+    AsinhStretch
+)
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+urllib3.disable_warnings(
+    urllib3.exceptions.InsecureRequestWarning
+)
 
-HIPS_URL = "https://unistra.fr"
+HIPS_URL = "https://alasky.cds.unistra.fr/hips-image-services/hips2fits"
+
 st.set_page_config(
-    page_title="MECH ORBIT | SPHEREx & IR Explorer",
+    page_title="MECH ORBIT | SPHEREx",
     page_icon="🌌",
     layout="wide"
 )
 
-BG_URL = "https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1920&q=80"
+BG_URL = (
+    "https://images.unsplash.com/"
+    "photo-1462331940025-496dfbfc7564"
+    "?auto=format&fit=crop&w=1920&q=80"
+)
 
 SPACE_CSS = f"""
 <style>
@@ -34,25 +44,12 @@ SPACE_CSS = f"""
 [data-testid="stSidebar"] {{
     background-color: rgba(8, 13, 30, 0.88);
     backdrop-filter: blur(14px);
-    border-right: 1px solid rgba(255, 255, 255, 0.14);
-}}
-[data-testid="stHeader"] {{
-    background: rgba(0, 0, 0, 0);
 }}
 div[data-testid="stMetric"] {{
     background-color: rgba(15, 23, 52, 0.82);
-    border: 1px solid rgba(120, 160, 255, 0.30);
+    border: 1px solid rgba(120, 160, 255, 0.3);
     padding: 12px 16px;
     border-radius: 12px;
-}}
-div[data-testid="stExpander"], div.stDataFrame {{
-    background-color: rgba(12, 18, 42, 0.78);
-    border-radius: 12px;
-    padding: 8px;
-}}
-div.stButton > button {{
-    border-radius: 10px;
-    font-weight: 600;
 }}
 </style>
 """
@@ -63,32 +60,43 @@ if "results" not in st.session_state:
 if "searched" not in st.session_state:
     st.session_state.searched = False
 if "target_name" not in st.session_state:
-    st.session_state.target_name = "Orion Nebula (M42)"
+    st.session_state.target_name = "Andromeda Galaxy (M31)"
 
 BAND_INFO = {
-    "AllWISE W1 (3.4 micron Near-IR)": (
-        "Old Stars & Galactic Structure",
-        "Penetrates dust to reveal older stars and core galactic structure."
+    "2MASS K-Band (2.17 micron Near-IR)": (
+        "Deep Galactic Core Penetration",
+        "Reveals young stellar objects and "
+        "galactic cores through dense dust."
     ),
-    "AllWISE W2 (4.6 micron Mid-IR)": (
-        "Brown Dwarfs & Warm Gas",
-        "Detects cool brown dwarfs and warm molecular gas clouds."
-    ),
-    "AllWISE W3 (12 micron Mid-IR)": (
-        "PAH Molecules & Stellar Nurseries",
-        "Highlights glowing dust lanes where new stars are actively forming."
-    ),
-    "AllWISE W4 (22 micron Far-IR)": (
-        "Protostars & Hot Cosmic Dust",
-        "Captures thermal emission from dust cocoons around newborn protostars."
+    "2MASS H-Band (1.65 micron Near-IR)": (
+        "Stellar Photosphere & Dust Window",
+        "Captures peak infrared brightness of "
+        "cool giant stars and galaxy disks."
     ),
     "2MASS J-Band (1.25 micron Near-IR)": (
         "Dust-Piercing Stellar Photometry",
-        "Cuts through galactic extinction 10x better than visible optical light."
+        "Cuts through interstellar extinction "
+        "10x better than optical light."
     ),
-    "2MASS K-Band (2.17 micron Near-IR)": (
-        "Deep Galactic Core Penetration",
-        "Reveals young stellar objects inside dense molecular clouds."
+    "WISE W1 (3.4 micron Near-IR)": (
+        "Old Stars & Galactic Structure",
+        "Penetrates dust to reveal older stars "
+        "and core galactic structure."
+    ),
+    "WISE W2 (4.6 micron Mid-IR)": (
+        "Brown Dwarfs & Warm Gas",
+        "Detects cool brown dwarfs and warm "
+        "molecular gas clouds."
+    ),
+    "WISE W3 (12 micron Mid-IR)": (
+        "PAH Molecules & Stellar Nurseries",
+        "Highlights glowing dust lanes where "
+        "new stars are actively forming."
+    ),
+    "WISE W4 (22 micron Far-IR)": (
+        "Protostars & Hot Cosmic Dust",
+        "Captures thermal emission from dust "
+        "cocoons around newborn protostars."
     )
 }
 
@@ -96,15 +104,16 @@ BAND_INFO = {
 @st.cache_data(ttl=600, show_spinner=False)
 def search_archive(collection, ra, dec, radius):
     surveys = (
-        ("AllWISE W1 (3.4 micron Near-IR)", "CDS/P/allWISE/W1", 3.4e-6),
-        ("AllWISE W2 (4.6 micron Mid-IR)", "CDS/P/allWISE/W2", 4.6e-6),
-        ("AllWISE W3 (12 micron Mid-IR)", "CDS/P/allWISE/W3", 1.2e-5),
-        ("AllWISE W4 (22 micron Far-IR)", "CDS/P/allWISE/W4", 2.2e-5),
+        ("2MASS K-Band (2.17 micron Near-IR)", "CDS/P/2MASS/K", 2.17e-6),
+        ("2MASS H-Band (1.65 micron Near-IR)", "CDS/P/2MASS/H", 1.65e-6),
         ("2MASS J-Band (1.25 micron Near-IR)", "CDS/P/2MASS/J", 1.25e-6),
-        ("2MASS K-Band (2.17 micron Near-IR)", "CDS/P/2MASS/K", 2.17e-6)
+        ("WISE W1 (3.4 micron Near-IR)", "CDS/P/WISE/W1", 3.4e-6),
+        ("WISE W2 (4.6 micron Mid-IR)", "CDS/P/WISE/W2", 4.6e-6),
+        ("WISE W3 (12 micron Mid-IR)", "CDS/P/WISE/W3", 1.2e-5),
+        ("WISE W4 (22 micron Far-IR)", "CDS/P/WISE/W4", 2.2e-5)
     )
     rows = list()
-    fov = max(0.15, min(float(radius) * 2.0, 2.5))
+    fov = max(0.20, min(float(radius) * 2.0, 2.5))
     for label, hips_id, wave in surveys:
         link = (
             f"{HIPS_URL}?hips={hips_id}"
@@ -131,7 +140,7 @@ def load_fits(url):
     resp.raise_for_status()
     head = resp.content[:500].lstrip().lower()
     if head.startswith(b"<!doctype") or head.startswith(b"<html"):
-        raise ValueError("Server returned HTML instead of FITS.")
+        raise ValueError("Selected band unavailable for this sky coordinate.")
     with fits.open(io.BytesIO(resp.content), memmap=False) as hdus:
         for hdu in hdus:
             data = getattr(hdu, "data", None)
@@ -139,8 +148,7 @@ def load_fits(url):
                 continue
             data = np.asarray(data)
             while data.ndim > 2:
-                mid = data.shape[0] // 2
-                data = data[mid]
+                data = data[data.shape[0] // 2]
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), (hdu.name or "PRIMARY")
     raise ValueError("No valid 2D image found in FITS file.")
@@ -226,8 +234,8 @@ st.write("Interactive astrophysical discovery tool for real FITS sky imagery.")
 
 st.sidebar.header("🔭 Target Coordinates")
 presets = {
-    "Orion Nebula (M42)": (83.8221, -5.3911),
     "Andromeda Galaxy (M31)": (10.6847, 41.2687),
+    "Orion Nebula (M42)": (83.8221, -5.3911),
     "Galactic Center": (266.4168, -29.0078),
     "Crab Nebula (M1)": (83.6331, 22.0145),
     "Carina Nebula (NGC 3372)": (161.2650, -59.8678),
@@ -238,7 +246,7 @@ def_ra, def_dec = presets[choice]
 
 ra = st.sidebar.number_input("Right Ascension (RA)", 0.0, 360.0, def_ra, format="%.4f")
 dec = st.sidebar.number_input("Declination (Dec)", -90.0, 90.0, def_dec, format="%.4f")
-radius = st.sidebar.number_input("Search Radius (deg)", 0.05, 2.0, 0.30, step=0.05, format="%.2f")
+radius = st.sidebar.number_input("Search Radius (deg)", 0.05, 2.0, 0.35, step=0.05, format="%.2f")
 
 st.sidebar.divider()
 collections = st.sidebar.multiselect(
