@@ -15,6 +15,7 @@ from astropy.visualization import ImageNormalize, AsinhStretch
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SIA_URL = "https://caltech.edu"
+TAP_URL = "https://caltech.edu"
 
 st.set_page_config(
     page_title="MECH ORBIT | SPHEREx Explorer",
@@ -39,9 +40,9 @@ def make_session():
         total=3,
         connect=3,
         read=3,
-        backoff_factor=2,
+        backoff_factor=1.5,
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET",),
+        allowed_methods=("GET", "POST"),
         raise_on_status=False
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -51,36 +52,68 @@ def make_session():
     return session
 
 
+def parse_votable_bytes(raw_bytes):
+    table = parse_single_table(io.BytesIO(raw_bytes)).to_table()
+    df = table.to_pandas()
+    for col in df.select_dtypes(include=("object",)).columns:
+        df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def search_archive(collection, ra, dec, radius):
     session = make_session()
-    params = {
+
+    # Step 1: Try Official IRSA SIA2 with standard VOTable MIME format
+    sia_params = {
         "COLLECTION": collection,
         "POS": f"circle {ra} {dec} {radius}",
-        "RESPONSEFORMAT": "VOTABLE"
+        "RESPONSEFORMAT": "application/x-votable+xml"
     }
-    response = session.get(SIA_URL, params=params, timeout=(20, 120))
-    response.raise_for_status()
 
-    if not response.content:
-        raise ValueError("Empty response from NASA archive.")
+    try:
+        resp = session.get(SIA_URL, params=sia_params, timeout=(15, 60))
+        raw = resp.content.lstrip()
+        lower_head = raw[:2000].lower()
 
-    raw = response.content.lstrip()
-    lower_head = raw[:3000].lower()
+        if resp.status_code == 200 and b"<votable" in lower_head and b'value="error"' not in lower_head:
+            df = parse_votable_bytes(raw)
+            df["selected_collection"] = collection
+            return df
+    except Exception:
+        pass
 
-    if b"<html" in lower_head or b"<!doctype" in lower_head or b"proxy error" in lower_head:
-        raise ValueError("NASA archive returned an HTML/proxy error.")
+    # Step 2: Automatic Fallback to NASA IRSA TAP Service (Zero Proxy Errors)
+    adql = (
+        f"SELECT TOP 200 obs_collection, obs_id, s_ra, s_dec, t_exptime, "
+        f"em_min, em_max, dataproduct_type, access_format, access_url "
+        f"FROM ivoa.obscore "
+        f"WHERE obs_collection = '{collection}' "
+        f"AND CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', {ra}, {dec}, {radius})) = 1"
+    )
 
-    if b'name="query_status" value="error"' in lower_head:
-        raise ValueError("NASA IRSA reported a query parameter fault.")
+    tap_data = {
+        "QUERY": adql,
+        "LANG": "ADQL",
+        "FORMAT": "votable"
+    }
 
-    table = parse_single_table(io.BytesIO(raw)).to_table()
-    df = table.to_pandas()
+    tap_resp = session.post(TAP_URL, data=tap_data, timeout=(20, 90))
+    tap_resp.raise_for_status()
 
-    for col in df.select_dtypes(include=("object",)).columns:
-        df[col] = df[col].apply(lambda x: x.decode("utf-8") if isinstance(x, bytes) else x)
+    tap_raw = tap_resp.content.lstrip()
+    tap_head = tap_raw[:2000].lower()
 
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    if b"<votable" not in tap_head:
+        snippet = tap_raw[:300].decode("utf-8", errors="ignore")
+        raise ValueError(f"Unexpected NASA IRSA response: {snippet}")
+
+    if b'name="query_status" value="error"' in tap_head:
+        snippet = tap_raw[:500].decode("utf-8", errors="ignore")
+        raise ValueError(f"NASA IRSA Query Error: {snippet}")
+
+    df = parse_votable_bytes(tap_raw)
     df["selected_collection"] = collection
     return df
 
@@ -100,7 +133,7 @@ def load_fits(url):
             if data.ndim < 2:
                 continue
             while data.ndim > 2:
-                mid = data.shape[0] // 2
+                mid = data.shape // 2
                 data = data[mid]
             if data.ndim == 2 and np.isfinite(data).any():
                 return data.astype(np.float32), (hdu.name or "PRIMARY")
@@ -188,7 +221,7 @@ st.write("Explore real infrared observations from NASA/IPAC Infrared Science Arc
 st.sidebar.header("🔭 Target Coordinates")
 
 preset_options = (
-    "Custom Coordinates",
+    "Default Sky Region",
     "Orion Nebula (M42)",
     "Galactic Center",
     "Andromeda Galaxy (M31)",
@@ -198,7 +231,7 @@ preset_options = (
 preset = st.sidebar.selectbox("Quick Sky Presets:", preset_options)
 
 preset_coords = {
-    "Custom Coordinates": (127.8000, 40.6000),
+    "Default Sky Region": (127.8000, 40.6000),
     "Orion Nebula (M42)": (83.8221, -5.3911),
     "Galactic Center": (266.4168, -29.0078),
     "Andromeda Galaxy (M31)": (10.6847, 41.2687),
@@ -209,7 +242,7 @@ default_ra, default_dec = preset_coords[preset]
 
 ra = st.sidebar.number_input("Right Ascension (RA deg)", min_value=0.0, max_value=360.0, value=default_ra, format="%.4f")
 dec = st.sidebar.number_input("Declination (Dec deg)", min_value=-90.0, max_value=90.0, value=default_dec, format="%.4f")
-radius = st.sidebar.number_input("Search Radius (deg)", min_value=0.01, max_value=5.0, value=0.50, step=0.05, format="%.2f")
+radius = st.sidebar.number_input("Search Radius (deg)", min_value=0.01, max_value=2.0, value=0.10, step=0.05, format="%.2f")
 
 st.sidebar.divider()
 st.sidebar.header("🛰️ Collections")
@@ -265,28 +298,24 @@ if st.session_state.searched:
             "s_ra",
             "s_dec",
             "t_exptime",
-            "em_min",
-            "em_max",
-            "dataproduct_type",
-            "access_format",
-            "access_url"
-        )
-        visible_cols = [c for c in preferred_cols if c in results_df.columns]
-        st.dataframe(results_df[visible_cols] if visible_cols else results_df, use_container_width=True)
-
-        csv_bytes = results_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="📥 Download Archive CSV",
-            data=csv_bytes,
-            file_name=f"spherex_ra{ra}_dec{dec}.csv",
-            mime="text/csv"
-        )
-
-        render_image_explorer(results_df)
-
-    elif not st.session_state.errors:
-        st.info("No observations found in this sky region. Try another preset or increase the search radius.")
-
+"em_min",
+"em_max",
+"dataproduct_type",
+"access_format",
+"access_url"
+)
+visible_cols = [c for c in preferred_cols if c in results_df.columns]
+st.dataframe(results_df[visible_cols] if visible_cols else results_df, use_container_width=True)
+csv_bytes = results_df.to_csv(index=False).encode("utf-8")
+st.download_button(
+label="📥 Download Archive CSV",
+data=csv_bytes,
+file_name=f"spherex_ra{ra}_dec{dec}.csv",
+mime="text/csv"
+)
+render_image_explorer(results_df)
+elif not st.session_state.errors:
+st.info("No observations found in this sky region. Try another preset or increase the search radius.")
 st.divider()
 st.subheader("🚀 About MECH ORBIT")
 st.write("MECH ORBIT is a student astronomy project designed to explore public SPHEREx infrared observations.")
